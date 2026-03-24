@@ -1,7 +1,6 @@
 // App.jsx
 import { useState, useEffect } from "react";
 import "./App.css";
-import { db } from "./firebase";
 import { doc, setDoc, getDoc, collection, getDocs } from "firebase/firestore";
 
 // ===== GERAR QUESTÕES =====
