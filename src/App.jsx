@@ -1,153 +1,220 @@
 import { useState, useEffect } from "react";
 import "./App.css";
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, getDoc, getDocs, collection, updateDoc } from "firebase/firestore";
+import { db } from "./firebase";
+import { doc, setDoc } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyDr...",
-  authDomain: "trabalho-da-escola-254e7.firebaseapp.com",
-  projectId: "trabalho-da-escola-254e7"
-};
+// GERAR QUESTÕES
+function generateQuestion(level) {
+  const a = Math.floor(Math.random()*20);
+  const b = Math.floor(Math.random()*20);
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+  if (level === 1) {
+    return { type:"input", q:`${a}+${b}`, a:String(a+b) };
+  }
 
-// QUESTÕES
-const questions = Array.from({ length: 100 }, () => {
-  let a = Math.floor(Math.random()*50);
-  let b = Math.floor(Math.random()*50);
-  return { q: `${a} + ${b}`, a: String(a+b) };
-});
+  if (level === 2) {
+    const correct = a+b;
+    const isTrue = Math.random() > 0.5;
+    return {
+      type:"vf",
+      q:`${a}+${b}=${isTrue ? correct : correct+1}`,
+      a: isTrue ? "true" : "false"
+    };
+  }
+
+  return {
+    type:"mc",
+    q:`${a}+${b}`,
+    options:[a+b, a+b+1, a+b-1, a+b+2].sort(()=>Math.random()-0.5),
+    a:String(a+b)
+  };
+}
 
 export default function App() {
-  const [screen, setScreen] = useState("login");
-  const [nickname, setNickname] = useState("");
-  const [password, setPassword] = useState("");
-  const [user, setUser] = useState(null);
-  const [error, setError] = useState("");
 
-  const [mode, setMode] = useState(null);
-  const [level, setLevel] = useState(1);
-  const [lives, setLives] = useState(3);
-  const [xp, setXp] = useState(0);
-  const [answer, setAnswer] = useState("");
-  const [currentQ, setCurrentQ] = useState(0);
-  const [result, setResult] = useState(null);
-  const [ranking, setRanking] = useState([]);
-  const [history, setHistory] = useState([]);
+  // 🔐 
+  const [screen,setScreen] = useState("choice");
+  const [username,setUsername] = useState("");
+  const [password,setPassword] = useState("");
+  const [user,setUser] = useState(null);
+  const [error,setError] = useState("");
 
-  function getQuestion() {
-    return questions[currentQ % questions.length];
-  }
+  //  GAME
+  const [level,setLevel] = useState(1);
+  const [lives,setLives] = useState(3);
+  const [streak,setStreak] = useState(0);
+  const [question,setQuestion] = useState(generateQuestion(1));
+  const [answer,setAnswer] = useState("");
+  const [intro,setIntro] = useState(true);
+  const [time,setTime] = useState(5);
 
-  function checkAnswer() {
-    if (answer == getQuestion().a) {
-      setXp(xp + 10);
-      if (xp + 10 >= 100) {
-        setLevel(level + 1);
-        setXp(0);
-        setResult("win");
-      }
-      setCurrentQ(currentQ + 1);
-    } else {
-      setLives(lives - 1);
-      if (lives - 1 <= 0) setResult("lose");
+  // 💾 CONTAS (local)
+  function register(){
+    if(!username || !password){
+      setError("Preencha tudo");
+      return;
     }
-    setAnswer("");
+
+    const users = JSON.parse(localStorage.getItem("users")) || [];
+
+    const exists = users.find(u => u.username === username);
+    if(exists){
+      setError("Usuário já existe");
+      return;
+    }
+
+    users.push({username,password,score:0});
+    localStorage.setItem("users", JSON.stringify(users));
+
+    setUser(username);
+    setScreen("menu");
   }
 
-  useEffect(() => {
-    const key = (e) => e.key === "Enter" && checkAnswer();
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  });
+  function login(){
+    const users = JSON.parse(localStorage.getItem("users")) || [];
+
+    const found = users.find(
+      u => u.username === username && u.password === password
+    );
+
+    if(!found){
+      setError("Login inválido");
+      return;
+    }
+
+    setUser(username);
+    setScreen("menu");
+  }
+
+  // ⏱️ INTRO TIMER 
+  useEffect(()=>{
+    if(!intro) return;
+
+    const timer = setInterval(()=>{
+      setTime(prev=>{
+        if(prev <= 1){
+          clearInterval(timer);
+          setIntro(false);
+          return 5;
+        }
+        return prev - 1;
+      });
+    },1000);
+
+    return ()=>clearInterval(timer);
+  },[intro]);
+
+  // ⏱️ GAME TIMER 
+  useEffect(()=>{
+    if(intro) return;
+
+    const timer = setInterval(()=>{
+      setTime(prev=>{
+        if(prev <= 1){
+          handleWrong();
+          return 10;
+        }
+        return prev - 1;
+      });
+    },1000);
+
+    return ()=>clearInterval(timer);
+  },[intro]);
+
+  function next(){
+    setQuestion(generateQuestion(level));
+    setAnswer("");
+    setIntro(true);
+  }
+
+  function handleCorrect(){
+    setStreak(prev=>prev+1);
+
+    if(streak+1 >= 3){
+      setLevel(prev=>prev+1);
+      setStreak(0);
+    }
+
+    next();
+  }
+
+  function handleWrong(){
+    setLives(prev=>prev-1);
+    setStreak(0);
+
+    if(lives-1 <= 0){
+      setScreen("menu");
+      setLives(3);
+      return;
+    }
+
+    if(level > 1) setLevel(prev=>prev-1);
+
+    next();
+  }
+
+  function check(ans){
+    if(ans == question.a) handleCorrect();
+    else handleWrong();
+  }
+
+  // ⌨️ ENTER
+  useEffect(()=>{
+    const key = (e)=>{
+      if(e.key==="Enter" && question.type==="input"){
+        check(answer);
+      }
+    };
+    window.addEventListener("keydown",key);
+    return ()=>window.removeEventListener("keydown",key);
+  },[answer,question]);
+
+  // 🔐 ESCOLHA
+  if(screen==="choice"){
+    return(
+      <div className="container">
+        <h1> Math Game CEM 01</h1>
+
+        <button className="btn" onClick={()=>setScreen("login")}>
+          Entrar
+        </button>
+
+        <button className="btn" onClick={()=>setScreen("register")}>
+          Criar Conta
+        </button>
+      </div>
+    );
+  }
 
   // LOGIN
-  async function login() {
-    const ref = doc(db, "users", nickname);
-    const snap = await getDoc(ref);
-
-    if (!snap.exists()) return setError("Conta não existe");
-
-    if (snap.data().password !== password) {
-      return setError("Senha errada");
-    }
-
-    setUser(nickname);
-    setHistory(snap.data().history || []);
-    setScreen("menu");
-  }
-
-  // REGISTRO
-  async function register() {
-    const ref = doc(db, "users", nickname);
-    const snap = await getDoc(ref);
-
-    if (snap.exists()) return setError("Nome já existe");
-
-    await setDoc(ref, {
-      password,
-      level: 1,
-      history: [],
-      scores: {}
-    });
-
-    setUser(nickname);
-    setScreen("menu");
-  }
-
-  // SALVAR
-  async function saveGame() {
-    const ref = doc(db, "users", user);
-
-    const snap = await getDoc(ref);
-    const data = snap.data();
-
-    const newHistory = [
-      ...data.history,
-      { mode, level, date: new Date().toLocaleString() }
-    ];
-
-    const newScores = {
-      ...data.scores,
-      [mode]: Math.max(data.scores?.[mode] || 0, level)
-    };
-
-    await updateDoc(ref, {
-      level,
-      history: newHistory,
-      scores: newScores
-    });
-  }
-
-  // RANKING
-  async function loadRanking() {
-    const query = await getDocs(collection(db, "users"));
-    const list = [];
-
-    query.forEach(doc => {
-      const data = doc.data();
-      list.push({
-        name: doc.id,
-        score: data.scores?.[mode] || 0
-      });
-    });
-
-    list.sort((a,b)=>b.score - a.score);
-    setRanking(list);
-  }
-
-  // LOGIN SCREEN
-  if (screen === "login") {
-    return (
+  if(screen==="login"){
+    return(
       <div className="container">
-        <h1>🔥 Math Game</h1>
+        <h2>Entrar</h2>
 
-        <input placeholder="Nome" onChange={(e)=>setNickname(e.target.value)} />
-        <input type="password" placeholder="Senha" onChange={(e)=>setPassword(e.target.value)} />
+        <input placeholder="Nome" onChange={e=>setUsername(e.target.value)}/>
+        <input type="password" placeholder="Senha" onChange={e=>setPassword(e.target.value)}/>
 
         <button className="btn" onClick={login}>Entrar</button>
-        <button className="btn" onClick={register}>Criar Conta</button>
+        <button className="btn" onClick={()=>setScreen("choice")}>Voltar</button>
+
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  // REGISTER
+  if(screen==="register"){
+    return(
+      <div className="container">
+        <h2>Criar Conta</h2>
+
+        <input placeholder="Nome" onChange={e=>setUsername(e.target.value)}/>
+        <input type="password" placeholder="Senha" onChange={e=>setPassword(e.target.value)}/>
+
+        <button className="btn" onClick={register}>Criar</button>
+        <button className="btn" onClick={()=>setScreen("choice")}>Voltar</button>
 
         <p>{error}</p>
       </div>
@@ -155,88 +222,82 @@ export default function App() {
   }
 
   // MENU
-  if (screen === "menu") {
-    return (
+  if(screen==="menu"){
+    return(
       <div className="container">
-        <h2>Bem-vindo {user}</h2>
+        <h1>🏠 Menu</h1>
+<h3>👤 {user}</h3>
+<h3>XP: {xp}</h3>
+<h3>Nível: {level}</h3>
 
-        <button className="btn" onClick={()=>{setMode("treino");setScreen("game")}}>Treino</button>
-        <button className="btn" onClick={()=>{setMode("desafio");setScreen("game")}}>Desafio</button>
-        <button className="btn" onClick={()=>{setMode("tempo");setScreen("game")}}>Tempo</button>
+<h2>🏆 Ranking</h2>
 
-        <button className="btn" onClick={()=>{loadRanking();setScreen("ranking")}}>
-          Ranking 🏆
-        </button>
-
-        <button className="btn" onClick={()=>setScreen("history")}>
-          Histórico 📊
+{ranking.map((r,i)=>(
+  <p key={i}>{i+1}. {r.name} - {r.xp}</p>
+))}
+        <button className="btn" onClick={()=>setScreen("game")}>
+          Jogar
         </button>
       </div>
     );
   }
 
   // GAME
-  if (screen === "game") {
-    return (
-      <div className="container">
-        <button className="btn" onClick={()=>setScreen("menu")}>⬅ Menu</button>
+  return(
+    <div className="container">
 
-        <h2>{user} | Lv {level} | ❤️ {lives}</h2>
+      <h3>👤 {user}</h3>
+      <h3>❤️ {lives} | 🔥 {streak} | 📈 {level}</h3>
 
-        <h1>{getQuestion().q}</h1>
+      {intro ? (
+        <div className="intro">
+          <h2>
+            {question.type==="input" && "✍️ Digite"}
+            {question.type==="vf" && "✅ V ou F"}
+            {question.type==="mc" && "🎯 Escolha"}
+          </h2>
+          <p>{time}</p>
+        </div>
+      ) : (
+        <>
+          <h2>{question.q}</h2>
+          <p>⏱️ {time}</p>
 
-        <input value={answer} onChange={(e)=>setAnswer(e.target.value)} />
+<div className="overlay">
+  <h1>🎉 Resultado</h1>
 
-        <button className="btn" onClick={checkAnswer}>Responder</button>
+  <p>XP total: {xp}</p>
+  <p>Streak: {streak}</p>
+  <p>Nível: {level}</p>
 
-        {result && (
-          <div className="overlay">
-            <h1>{result === "win" ? "🎉 Vitória" : "💀 Derrota"}</h1>
-            <button className="btn" onClick={()=>{
-              saveGame();
-              setLives(3);
-              setResult(null);
-              setScreen("menu");
-            }}>
-              Voltar
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
+  <button onClick={()=>setScreen("menu")}>
+    Voltar ao menu
+  </button>
+</div>
 
-  // RANKING
-  if (screen === "ranking") {
-    return (
-      <div className="container">
-        <h2>🏆 Ranking ({mode})</h2>
+{question.type==="input" && (
+  <>
+    <input value={answer} onChange={e=>setAnswer(e.target.value)}/>
+    <button className="btn" onClick={()=>check(answer)}>OK</button>
+  </>
+)}
 
-        {ranking.map((p,i)=>(
-          <p key={i}>{i+1}. {p.name} - Lv {p.score}</p>
-        ))}
+{question.type==="vf" && (
+            <>
+              <button className="btn" onClick={()=>check("true")}>V</button>
+              <button className="btn" onClick={()=>check("false")}>F</button>
+            </>
+          )}
 
-        <button className="btn" onClick={()=>setScreen("menu")}>
-          Voltar
-        </button>
-      </div>
-    );
-  }
-
-  // HISTÓRICO
-  if (screen === "history") {
-    return (
-      <div className="container">
-        <h2>📊 Histórico</h2>
-
-        {history.map((h,i)=>(
-          <p key={i}>{h.mode} | Lv {h.level} | {h.date}</p>
-        ))}
-
-        <button className="btn" onClick={()=>setScreen("menu")}>
-          Voltar
-        </button>
-      </div>
-    );
-  }
+          {question.type==="mc" &&
+            question.options.map((o,i)=>(
+              <button key={i} className="btn" onClick={()=>check(String(o))}>
+                {o}
+              </button>
+            ))
+          }
+        </>
+      )}
+    </div>
+  );
 }
