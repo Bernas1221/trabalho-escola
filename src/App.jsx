@@ -1,17 +1,14 @@
 import { useState, useEffect } from "react";
 import "./App.css";
 import { db } from "./firebase";
-import { doc, setDoc } from "firebase/firestore";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, doc, setDoc, getDocs, query, orderBy } from "firebase/firestore";
 
 // GERAR QUESTÕES
 function generateQuestion(level) {
   const a = Math.floor(Math.random() * 20);
   const b = Math.floor(Math.random() * 20);
 
-  if (level === 1) {
-    return { type: "input", q: `${a}+${b}`, a: String(a + b) };
-  }
+  if (level === 1) return { type: "input", q: `${a}+${b}`, a: String(a + b) };
 
   if (level === 2) {
     const correct = a + b;
@@ -26,15 +23,12 @@ function generateQuestion(level) {
   return {
     type: "mc",
     q: `${a}+${b}`,
-    options: [a + b, a + b + 1, a + b - 1, a + b + 2].sort(
-      () => Math.random() - 0.5
-    ),
+    options: [a + b, a + b + 1, a + b - 1, a + b + 2].sort(() => Math.random() - 0.5),
     a: String(a + b),
   };
 }
 
 export default function App() {
-  // 🔐 LOGIN / REGISTER
   const [screen, setScreen] = useState("choice");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -48,54 +42,70 @@ export default function App() {
   const [question, setQuestion] = useState(generateQuestion(1));
   const [answer, setAnswer] = useState("");
   const [intro, setIntro] = useState(true);
-  const [time, setTime] = useState(5);
+  const [time, setTime] = useState(7);
 
   // XP e ranking
   const [xp, setXp] = useState(0);
   const [ranking, setRanking] = useState([]);
-
-  // Overlay de resultado
   const [showOverlay, setShowOverlay] = useState(false);
 
-  // 💾 CONTAS (local)
-  function register() {
+  // ===== LOGIN / REGISTER =====
+  async function register() {
     if (!username || !password) {
       setError("Preencha tudo");
       return;
     }
-
-    const users = JSON.parse(localStorage.getItem("users")) || [];
-    const exists = users.find((u) => u.username === username);
-    if (exists) {
-      setError("Usuário já existe");
-      return;
+    const userRef = doc(db, "users", username);
+    try {
+      await setDoc(userRef, { password, score: 0 });
+      setUser(username);
+      setXp(0);
+      setScreen("menu");
+      updateRanking();
+    } catch (e) {
+      setError("Erro ao criar usuário");
+      console.error(e);
     }
-
-    users.push({ username, password, score: 0 });
-    localStorage.setItem("users", JSON.stringify(users));
-
-    setUser(username);
-    setXp(0); // novo usuário começa com 0 XP
-    setScreen("menu");
   }
 
-  function login() {
-    const users = JSON.parse(localStorage.getItem("users")) || [];
-    const found = users.find(
-      (u) => u.username === username && u.password === password
-    );
-
-    if (!found) {
-      setError("Login inválido");
+  async function login() {
+    if (!username || !password) {
+      setError("Preencha tudo");
       return;
     }
+    try {
+      const userRef = doc(db, "users", username);
+      const userSnap = await getDocs(collection(db, "users"));
+      const userDoc = userSnap.docs.find((d) => d.id === username);
 
-    setUser(username);
-    setXp(found.score || 0); // carrega XP do usuário
-    setScreen("menu");
+      if (!userDoc) {
+        setError("Usuário não existe");
+        return;
+      }
+      const data = userDoc.data();
+      if (data.password !== password) {
+        setError("Senha inválida");
+        return;
+      }
+      setUser(username);
+      setXp(data.score || 0);
+      setScreen("menu");
+      updateRanking();
+    } catch (e) {
+      console.error(e);
+      setError("Erro no login");
+    }
   }
 
-  // ⏱️ INTRO TIMER
+  // ===== UPDATE RANKING =====
+  async function updateRanking() {
+    const q = query(collection(db, "users"), orderBy("score", "desc"));
+    const querySnap = await getDocs(q);
+    const usersList = querySnap.docs.map((d) => ({ username: d.id, ...d.data() }));
+    setRanking(usersList);
+  }
+
+  // ===== GAME TIMERS =====
   useEffect(() => {
     if (!intro) return;
 
@@ -104,7 +114,8 @@ export default function App() {
         if (prev <= 1) {
           clearInterval(timer);
           setIntro(false);
-          return 5;
+          setTime(7); // reset tempo resposta
+          return 7;
         }
         return prev - 1;
       });
@@ -113,100 +124,82 @@ export default function App() {
     return () => clearInterval(timer);
   }, [intro]);
 
-  // ⏱️ GAME TIMER
   useEffect(() => {
     if (intro) return;
 
     const timer = setInterval(() => {
       setTime((prev) => {
         if (prev <= 1) {
-          handleWrong();
-          return 10;
+          check(""); // simula resposta vazia
+          return 7;
         }
         return prev - 1;
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [intro]);
+  }, [intro, question]);
 
-  // ⌨️ ENTER
+  // ===== ENTER =====
   useEffect(() => {
     const key = (e) => {
-      if (e.key === "Enter" && question.type === "input") {
-        check(answer);
-      }
+      if (e.key === "Enter" && question.type === "input") check(answer);
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [answer, question]);
 
-  // Atualizar ranking ao abrir menu
-  useEffect(() => {
-    if (screen === "menu") {
-      const users = JSON.parse(localStorage.getItem("users")) || [];
-      const sorted = users.sort((a, b) => b.score - a.score);
-      setRanking(sorted);
-    }
-  }, [screen]);
-
-  // Próxima pergunta
+  // ===== PROXIMA PERGUNTA =====
   function next() {
     setQuestion(generateQuestion(level));
     setAnswer("");
     setIntro(true);
+    setTime(7);
   }
 
-  function handleCorrect() {
+  async function handleCorrect() {
     setStreak((prev) => prev + 1);
-    setXp((prev) => prev + 10);
+    const newXP = xp + 10;
+    setXp(newXP);
 
-    // atualizar score no localStorage
-    const users = JSON.parse(localStorage.getItem("users")) || [];
-    const index = users.findIndex((u) => u.username === user);
-    if (index !== -1) {
-      users[index].score = (users[index].score || 0) + 10;
-      localStorage.setItem("users", JSON.stringify(users));
-    }
+    const userRef = doc(db, "users", user);
+    await setDoc(userRef, { password: password, score: newXP });
 
     if (streak + 1 >= 3) {
       setLevel((prev) => prev + 1);
       setStreak(0);
     }
 
-    // mostrar overlay por 3 segundos
     setShowOverlay(true);
-    setTimeout(() => setShowOverlay(false), 3000);
+    setTimeout(() => setShowOverlay(false), 2000);
 
     next();
+    updateRanking();
   }
 
-  function handleWrong() {
+  async function handleWrong() {
     setLives((prev) => prev - 1);
     setStreak(0);
-    setXp((prev) => Math.max(prev - 5, 0));
+    const newXP = Math.max(xp - 5, 0);
+    setXp(newXP);
 
-    // atualizar score no localStorage
-    const users = JSON.parse(localStorage.getItem("users")) || [];
-    const index = users.findIndex((u) => u.username === user);
-    if (index !== -1) {
-      users[index].score = Math.max((users[index].score || 0) - 5, 0);
-      localStorage.setItem("users", JSON.stringify(users));
-    }
+    const userRef = doc(db, "users", user);
+    await setDoc(userRef, { password: password, score: newXP });
 
     if (lives - 1 <= 0) {
       setScreen("menu");
       setLives(3);
+      updateRanking();
       return;
     }
 
     if (level > 1) setLevel((prev) => prev - 1);
 
-    // mostrar overlay por 3 segundos
     setShowOverlay(true);
-    setTimeout(() => setShowOverlay(false), 3000);
+    setTimeout(() => setShowOverlay(false), 2000);
 
     next();
+    updateRanking();
   }
 
   function check(ans) {
@@ -214,8 +207,8 @@ export default function App() {
     else handleWrong();
   }
 
-  // 🔐 ESCOLHA
-  if (screen === "choice") {
+  // ===== RENDER =====
+  if (screen === "choice")
     return (
       <div className="container">
         <h1>Math Game CEM 01</h1>
@@ -227,27 +220,16 @@ export default function App() {
         </button>
       </div>
     );
-  }
 
-  // LOGIN
-  if (screen === "login") {
+  if (screen === "login")
     return (
       <div className="container">
         <h2>Entrar</h2>
-        <input
-          placeholder="Nome"
-          onChange={(e) => {
-            setUsername(e.target.value);
-            setError("");
-          }}
-        />
+        <input placeholder="Nome" onChange={(e) => setUsername(e.target.value)} />
         <input
           type="password"
           placeholder="Senha"
-          onChange={(e) => {
-            setPassword(e.target.value);
-            setError("");
-          }}
+          onChange={(e) => setPassword(e.target.value)}
         />
         <button className="btn" onClick={login}>
           Entrar
@@ -258,27 +240,16 @@ export default function App() {
         <p>{error}</p>
       </div>
     );
-  }
 
-  // REGISTER
-  if (screen === "register") {
+  if (screen === "register")
     return (
       <div className="container">
         <h2>Criar Conta</h2>
-        <input
-          placeholder="Nome"
-          onChange={(e) => {
-            setUsername(e.target.value);
-            setError("");
-          }}
-        />
+        <input placeholder="Nome" onChange={(e) => setUsername(e.target.value)} />
         <input
           type="password"
           placeholder="Senha"
-          onChange={(e) => {
-            setPassword(e.target.value);
-            setError("");
-          }}
+          onChange={(e) => setPassword(e.target.value)}
         />
         <button className="btn" onClick={register}>
           Criar
@@ -289,10 +260,8 @@ export default function App() {
         <p>{error}</p>
       </div>
     );
-  }
 
-  // MENU
-  if (screen === "menu") {
+  if (screen === "menu")
     return (
       <div className="container">
         <h1>🏠 Menu</h1>
@@ -301,24 +270,20 @@ export default function App() {
         <h3>Nível: {level}</h3>
 
         <h2>🏆 Ranking</h2>
-        {ranking.length > 0 ? (
-          ranking.map((r, i) => (
-            <p key={i}>
-              {i + 1}. {r.username} - {r.score}
-            </p>
-          ))
-        ) : (
-          <p>Nenhum jogador ainda</p>
-        )}
+        {ranking.length > 0
+          ? ranking.map((r, i) => (
+              <p key={i}>
+                {i + 1}. {r.username} - {r.score}
+              </p>
+            ))
+          : <p>Nenhum jogador ainda</p>}
 
-        <button className="btn" onClick={() => setScreen("game")}>
+        <button className="btn" onClick={() => { next(); setScreen("game"); }}>
           Jogar
         </button>
       </div>
     );
-  }
 
-  // GAME
   return (
     <div className="container">
       <h3>👤 {user}</h3>
