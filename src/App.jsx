@@ -6,181 +6,223 @@ import { collection, getDocs } from "firebase/firestore";
 
 // GERAR QUESTÕES
 function generateQuestion(level) {
-  const a = Math.floor(Math.random()*20);
-  const b = Math.floor(Math.random()*20);
+  const a = Math.floor(Math.random() * 20);
+  const b = Math.floor(Math.random() * 20);
 
   if (level === 1) {
-    return { type:"input", q:`${a}+${b}`, a:String(a+b) };
+    return { type: "input", q: `${a}+${b}`, a: String(a + b) };
   }
 
   if (level === 2) {
-    const correct = a+b;
+    const correct = a + b;
     const isTrue = Math.random() > 0.5;
     return {
-      type:"vf",
-      q:`${a}+${b}=${isTrue ? correct : correct+1}`,
-      a: isTrue ? "true" : "false"
+      type: "vf",
+      q: `${a}+${b}=${isTrue ? correct : correct + 1}`,
+      a: isTrue ? "true" : "false",
     };
   }
 
   return {
-    type:"mc",
-    q:`${a}+${b}`,
-    options:[a+b, a+b+1, a+b-1, a+b+2].sort(()=>Math.random()-0.5),
-    a:String(a+b)
+    type: "mc",
+    q: `${a}+${b}`,
+    options: [a + b, a + b + 1, a + b - 1, a + b + 2].sort(
+      () => Math.random() - 0.5
+    ),
+    a: String(a + b),
   };
 }
 
 export default function App() {
+  // 🔐 LOGIN / REGISTER
+  const [screen, setScreen] = useState("choice");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [user, setUser] = useState(null);
+  const [error, setError] = useState("");
 
-  // 🔐 
-  const [screen,setScreen] = useState("choice");
-  const [username,setUsername] = useState("");
-  const [password,setPassword] = useState("");
-  const [user,setUser] = useState(null);
-  const [error,setError] = useState("");
+  // GAME
+  const [level, setLevel] = useState(1);
+  const [lives, setLives] = useState(3);
+  const [streak, setStreak] = useState(0);
+  const [question, setQuestion] = useState(generateQuestion(1));
+  const [answer, setAnswer] = useState("");
+  const [intro, setIntro] = useState(true);
+  const [time, setTime] = useState(5);
 
-  //  GAME
-  const [level,setLevel] = useState(1);
-  const [lives,setLives] = useState(3);
-  const [streak,setStreak] = useState(0);
-  const [question,setQuestion] = useState(generateQuestion(1));
-  const [answer,setAnswer] = useState("");
-  const [intro,setIntro] = useState(true);
-  const [time,setTime] = useState(5);
+  // XP e ranking
+  const [xp, setXp] = useState(0);
+  const [ranking, setRanking] = useState([]);
+
+  // Overlay de resultado
+  const [showOverlay, setShowOverlay] = useState(false);
 
   // 💾 CONTAS (local)
-  function register(){
-    if(!username || !password){
+  function register() {
+    if (!username || !password) {
       setError("Preencha tudo");
       return;
     }
 
     const users = JSON.parse(localStorage.getItem("users")) || [];
-
-    const exists = users.find(u => u.username === username);
-    if(exists){
+    const exists = users.find((u) => u.username === username);
+    if (exists) {
       setError("Usuário já existe");
       return;
     }
 
-    users.push({username,password,score:0});
+    users.push({ username, password, score: 0 });
     localStorage.setItem("users", JSON.stringify(users));
 
     setUser(username);
+    setXp(0); // novo usuário começa com 0 XP
     setScreen("menu");
   }
 
-  function login(){
+  function login() {
     const users = JSON.parse(localStorage.getItem("users")) || [];
-
     const found = users.find(
-      u => u.username === username && u.password === password
+      (u) => u.username === username && u.password === password
     );
 
-    if(!found){
+    if (!found) {
       setError("Login inválido");
       return;
     }
 
     setUser(username);
+    setXp(found.score || 0); // carrega XP do usuário
     setScreen("menu");
   }
 
-  // ⏱️ INTRO TIMER 
-  useEffect(()=>{
-    if(!intro) return;
+  // ⏱️ INTRO TIMER
+  useEffect(() => {
+    if (!intro) return;
 
-    const timer = setInterval(()=>{
-      setTime(prev=>{
-        if(prev <= 1){
+    const timer = setInterval(() => {
+      setTime((prev) => {
+        if (prev <= 1) {
           clearInterval(timer);
           setIntro(false);
           return 5;
         }
         return prev - 1;
       });
-    },1000);
+    }, 1000);
 
-    return ()=>clearInterval(timer);
-  },[intro]);
+    return () => clearInterval(timer);
+  }, [intro]);
 
-  // ⏱️ GAME TIMER 
-  useEffect(()=>{
-    if(intro) return;
+  // ⏱️ GAME TIMER
+  useEffect(() => {
+    if (intro) return;
 
-    const timer = setInterval(()=>{
-      setTime(prev=>{
-        if(prev <= 1){
+    const timer = setInterval(() => {
+      setTime((prev) => {
+        if (prev <= 1) {
           handleWrong();
           return 10;
         }
         return prev - 1;
       });
-    },1000);
+    }, 1000);
 
-    return ()=>clearInterval(timer);
-  },[intro]);
+    return () => clearInterval(timer);
+  }, [intro]);
 
-  function next(){
+  // ⌨️ ENTER
+  useEffect(() => {
+    const key = (e) => {
+      if (e.key === "Enter" && question.type === "input") {
+        check(answer);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [answer, question]);
+
+  // Atualizar ranking ao abrir menu
+  useEffect(() => {
+    if (screen === "menu") {
+      const users = JSON.parse(localStorage.getItem("users")) || [];
+      const sorted = users.sort((a, b) => b.score - a.score);
+      setRanking(sorted);
+    }
+  }, [screen]);
+
+  // Próxima pergunta
+  function next() {
     setQuestion(generateQuestion(level));
     setAnswer("");
     setIntro(true);
   }
 
-  function handleCorrect(){
-    setStreak(prev=>prev+1);
+  function handleCorrect() {
+    setStreak((prev) => prev + 1);
+    setXp((prev) => prev + 10);
 
-    if(streak+1 >= 3){
-      setLevel(prev=>prev+1);
+    // atualizar score no localStorage
+    const users = JSON.parse(localStorage.getItem("users")) || [];
+    const index = users.findIndex((u) => u.username === user);
+    if (index !== -1) {
+      users[index].score = (users[index].score || 0) + 10;
+      localStorage.setItem("users", JSON.stringify(users));
+    }
+
+    if (streak + 1 >= 3) {
+      setLevel((prev) => prev + 1);
       setStreak(0);
     }
+
+    // mostrar overlay por 3 segundos
+    setShowOverlay(true);
+    setTimeout(() => setShowOverlay(false), 3000);
 
     next();
   }
 
-  function handleWrong(){
-    setLives(prev=>prev-1);
+  function handleWrong() {
+    setLives((prev) => prev - 1);
     setStreak(0);
+    setXp((prev) => Math.max(prev - 5, 0));
 
-    if(lives-1 <= 0){
+    // atualizar score no localStorage
+    const users = JSON.parse(localStorage.getItem("users")) || [];
+    const index = users.findIndex((u) => u.username === user);
+    if (index !== -1) {
+      users[index].score = Math.max((users[index].score || 0) - 5, 0);
+      localStorage.setItem("users", JSON.stringify(users));
+    }
+
+    if (lives - 1 <= 0) {
       setScreen("menu");
       setLives(3);
       return;
     }
 
-    if(level > 1) setLevel(prev=>prev-1);
+    if (level > 1) setLevel((prev) => prev - 1);
+
+    // mostrar overlay por 3 segundos
+    setShowOverlay(true);
+    setTimeout(() => setShowOverlay(false), 3000);
 
     next();
   }
 
-  function check(ans){
-    if(ans == question.a) handleCorrect();
+  function check(ans) {
+    if (ans == question.a) handleCorrect();
     else handleWrong();
   }
 
-  // ⌨️ ENTER
-  useEffect(()=>{
-    const key = (e)=>{
-      if(e.key==="Enter" && question.type==="input"){
-        check(answer);
-      }
-    };
-    window.addEventListener("keydown",key);
-    return ()=>window.removeEventListener("keydown",key);
-  },[answer,question]);
-
   // 🔐 ESCOLHA
-  if(screen==="choice"){
-    return(
+  if (screen === "choice") {
+    return (
       <div className="container">
-        <h1> Math Game CEM 01</h1>
-
-        <button className="btn" onClick={()=>setScreen("login")}>
+        <h1>Math Game CEM 01</h1>
+        <button className="btn" onClick={() => setScreen("login")}>
           Entrar
         </button>
-
-        <button className="btn" onClick={()=>setScreen("register")}>
+        <button className="btn" onClick={() => setScreen("register")}>
           Criar Conta
         </button>
       </div>
@@ -188,54 +230,88 @@ export default function App() {
   }
 
   // LOGIN
-  if(screen==="login"){
-    return(
+  if (screen === "login") {
+    return (
       <div className="container">
         <h2>Entrar</h2>
-
-        <input placeholder="Nome" onChange={e=>setUsername(e.target.value)}/>
-        <input type="password" placeholder="Senha" onChange={e=>setPassword(e.target.value)}/>
-
-        <button className="btn" onClick={login}>Entrar</button>
-        <button className="btn" onClick={()=>setScreen("choice")}>Voltar</button>
-
+        <input
+          placeholder="Nome"
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setError("");
+          }}
+        />
+        <input
+          type="password"
+          placeholder="Senha"
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setError("");
+          }}
+        />
+        <button className="btn" onClick={login}>
+          Entrar
+        </button>
+        <button className="btn" onClick={() => setScreen("choice")}>
+          Voltar
+        </button>
         <p>{error}</p>
       </div>
     );
   }
 
   // REGISTER
-  if(screen==="register"){
-    return(
+  if (screen === "register") {
+    return (
       <div className="container">
         <h2>Criar Conta</h2>
-
-        <input placeholder="Nome" onChange={e=>setUsername(e.target.value)}/>
-        <input type="password" placeholder="Senha" onChange={e=>setPassword(e.target.value)}/>
-
-        <button className="btn" onClick={register}>Criar</button>
-        <button className="btn" onClick={()=>setScreen("choice")}>Voltar</button>
-
+        <input
+          placeholder="Nome"
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setError("");
+          }}
+        />
+        <input
+          type="password"
+          placeholder="Senha"
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setError("");
+          }}
+        />
+        <button className="btn" onClick={register}>
+          Criar
+        </button>
+        <button className="btn" onClick={() => setScreen("choice")}>
+          Voltar
+        </button>
         <p>{error}</p>
       </div>
     );
   }
 
   // MENU
-  if(screen==="menu"){
-    return(
+  if (screen === "menu") {
+    return (
       <div className="container">
         <h1>🏠 Menu</h1>
-<h3>👤 {user}</h3>
-<h3>XP: {xp}</h3>
-<h3>Nível: {level}</h3>
+        <h3>👤 {user}</h3>
+        <h3>XP: {xp}</h3>
+        <h3>Nível: {level}</h3>
 
-<h2>🏆 Ranking</h2>
+        <h2>🏆 Ranking</h2>
+        {ranking.length > 0 ? (
+          ranking.map((r, i) => (
+            <p key={i}>
+              {i + 1}. {r.username} - {r.score}
+            </p>
+          ))
+        ) : (
+          <p>Nenhum jogador ainda</p>
+        )}
 
-{ranking.map((r,i)=>(
-  <p key={i}>{i+1}. {r.name} - {r.xp}</p>
-))}
-        <button className="btn" onClick={()=>setScreen("game")}>
+        <button className="btn" onClick={() => setScreen("game")}>
           Jogar
         </button>
       </div>
@@ -243,18 +319,19 @@ export default function App() {
   }
 
   // GAME
-  return(
+  return (
     <div className="container">
-
       <h3>👤 {user}</h3>
-      <h3>❤️ {lives} | 🔥 {streak} | 📈 {level}</h3>
+      <h3>
+        ❤️ {lives} | 🔥 {streak} | 📈 {level}
+      </h3>
 
       {intro ? (
         <div className="intro">
           <h2>
-            {question.type==="input" && "✍️ Digite"}
-            {question.type==="vf" && "✅ V ou F"}
-            {question.type==="mc" && "🎯 Escolha"}
+            {question.type === "input" && "✍️ Digite"}
+            {question.type === "vf" && "✅ V ou F"}
+            {question.type === "mc" && "🎯 Escolha"}
           </h2>
           <p>{time}</p>
         </div>
@@ -263,39 +340,41 @@ export default function App() {
           <h2>{question.q}</h2>
           <p>⏱️ {time}</p>
 
-<div className="overlay">
-  <h1>🎉 Resultado</h1>
+          {showOverlay && (
+            <div className="overlay">
+              <h1>🎉 Resultado</h1>
+              <p>XP total: {xp}</p>
+              <p>Streak: {streak}</p>
+              <p>Nível: {level}</p>
+            </div>
+          )}
 
-  <p>XP total: {xp}</p>
-  <p>Streak: {streak}</p>
-  <p>Nível: {level}</p>
-
-  <button onClick={()=>setScreen("menu")}>
-    Voltar ao menu
-  </button>
-</div>
-
-{question.type==="input" && (
-  <>
-    <input value={answer} onChange={e=>setAnswer(e.target.value)}/>
-    <button className="btn" onClick={()=>check(answer)}>OK</button>
-  </>
-)}
-
-{question.type==="vf" && (
+          {question.type === "input" && (
             <>
-              <button className="btn" onClick={()=>check("true")}>V</button>
-              <button className="btn" onClick={()=>check("false")}>F</button>
+              <input value={answer} onChange={(e) => setAnswer(e.target.value)} />
+              <button className="btn" onClick={() => check(answer)}>
+                OK
+              </button>
             </>
           )}
 
-          {question.type==="mc" &&
-            question.options.map((o,i)=>(
-              <button key={i} className="btn" onClick={()=>check(String(o))}>
+          {question.type === "vf" && (
+            <>
+              <button className="btn" onClick={() => check("true")}>
+                V
+              </button>
+              <button className="btn" onClick={() => check("false")}>
+                F
+              </button>
+            </>
+          )}
+
+          {question.type === "mc" &&
+            question.options.map((o, i) => (
+              <button key={i} className="btn" onClick={() => check(String(o))}>
                 {o}
               </button>
-            ))
-          }
+            ))}
         </>
       )}
     </div>
